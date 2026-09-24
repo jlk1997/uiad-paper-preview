@@ -26,7 +26,6 @@ function renderMath(tex, display) {
   }
 }
 
-// Protect math first
 const mathSlots = [];
 function parkMath(src) {
   let s = src;
@@ -45,7 +44,6 @@ function parkMath(src) {
     mathSlots.push(renderMath(tex.trim(), false));
     return `\u0000MATH${i}\u0000`;
   });
-  // inline $...$ but not $$
   s = s.replace(/(^|[^\\$])\$([^\n$]+?)\$/g, (_, pre, tex) => {
     const i = mathSlots.length;
     mathSlots.push(renderMath(tex.trim(), false));
@@ -57,7 +55,6 @@ function parkMath(src) {
 function unpark(s) {
   return s.replace(/\u0000MATH(\d+)\u0000/g, (_, i) => {
     const html = mathSlots[Number(i)];
-    // display math detection: katex-display class
     if (html.includes('katex-display')) {
       return `<div class="math-block">${html}</div>`;
     }
@@ -66,14 +63,12 @@ function unpark(s) {
 }
 
 function inlineFormat(s) {
-  // images already handled at block level
   s = s.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_, alt, src) =>
     `<img src="${esc(src)}" alt="${esc(alt)}">`);
   s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, t, u) =>
     `<a href="${esc(u)}">${esc(t)}</a>`);
   s = s.replace(/`([^`]+)`/g, (_, c) => `<code>${esc(c)}</code>`);
   s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-  // escape remaining raw < that aren't tags we introduced — already mostly safe since we build from md
   return s;
 }
 
@@ -81,7 +76,6 @@ function renderTable(rows) {
   if (rows.length < 2) return null;
   const split = (line) => line.replace(/^\||\|$/g,'').split('|').map(c => c.trim());
   const heads = split(rows[0]);
-  // skip separator row[1]
   const body = rows.slice(2).map(split);
   let html = '<table><thead><tr>' + heads.map(h => `<th>${inlineFormat(h)}</th>`).join('') + '</tr></thead><tbody>';
   for (const r of body) {
@@ -89,6 +83,23 @@ function renderTable(rows) {
   }
   html += '</tbody></table>';
   return html;
+}
+
+function paraClass(text) {
+  const t = text.trim();
+  // English subtitle (ASCII-heavy line right under title)
+  if (/^[A-Za-z].{10,}/.test(t) && !t.includes('：') && t.length < 160 && !t.startsWith('**')) {
+    return 'subtitle';
+  }
+  // author / affiliation lines
+  if (/^(作者|单位|通讯|作者：|单位：|通讯：)/.test(t)) return 'meta';
+  // keywords
+  if (/^\*\*关键词/.test(t) || /^关键词[：:]/.test(t)) return 'keywords';
+  // figure / table captions only (e.g. **图1** ...), not body sentences starting with 图2
+  if (/^\*\*图\d+\*\*/.test(t) || /^\*\*表\d+\*\*/.test(t)) {
+    return 'caption';
+  }
+  return '';
 }
 
 function mdToHtml(src) {
@@ -104,7 +115,10 @@ function mdToHtml(src) {
     const text = para.join('\n').trim();
     para = [];
     if (!text) return;
-    out.push(`<p>${inlineFormat(text).replace(/\n/g, '<br>')}</p>`);
+    const cls = paraClass(text);
+    const body = inlineFormat(text).replace(/\n/g, '<br>');
+    if (cls) out.push(`<p class="${cls}">${body}</p>`);
+    else out.push(`<p>${body}</p>`);
   }
   function closeUl() {
     if (inUl) { out.push('</ul>'); inUl = false; }
@@ -113,7 +127,6 @@ function mdToHtml(src) {
   while (i < lines.length) {
     const line = lines[i];
 
-    // table block
     if (/^\|/.test(line) && i + 1 < lines.length && /^\|?\s*:?-/.test(lines[i+1])) {
       flushPara(); closeUl();
       const rows = [];
@@ -135,7 +148,6 @@ function mdToHtml(src) {
     if (hm) {
       flushPara(); closeUl();
       const level = hm[1].length;
-      // title h1 from first # already; use as-is
       out.push(`<h${level}>${inlineFormat(hm[2])}</h${level}>`);
       i++; continue;
     }
@@ -149,11 +161,8 @@ function mdToHtml(src) {
     }
     const ol = /^(\d+)\.\s+(.*)$/.exec(line);
     if (ol) {
-      // treat numbered as paragraphs with bold number or as ol — use ordered list
       flushPara();
-      // simple: open ol if needed — use a flag; for simplicity push as <p> with number for contributions
       closeUl();
-      // collect consecutive ol
       const items = [];
       while (i < lines.length) {
         const m = /^(\d+)\.\s+(.*)$/.exec(lines[i]);
@@ -170,7 +179,6 @@ function mdToHtml(src) {
       i++; continue;
     }
 
-    // caption lines like **图1** ...
     closeUl();
     para.push(line);
     i++;
@@ -181,8 +189,6 @@ function mdToHtml(src) {
 
 const titleMatch = md.match(/^#\s+(.+)$/m);
 const title = titleMatch ? titleMatch[1].trim() : 'UIAD';
-const bodyHtml = mdToHtml(md.replace(/^#\s+.+$/m, '').trim()); // drop duplicate h1 from body? keep it
-// Actually keep full including h1
 const fullBody = mdToHtml(md);
 
 const html = `<!DOCTYPE html>
@@ -191,14 +197,134 @@ const html = `<!DOCTYPE html>
 <title>${esc(title)}</title>
 <link rel="stylesheet" href="vendor/katex/katex.min.css">
 <style>
-body{font-family:"Microsoft YaHei","PingFang SC",sans-serif;max-width:860px;margin:2rem auto;padding:0 1.2rem;line-height:1.75;color:#222;background:#fff;}
-h1{font-size:1.55rem;} h2{margin-top:1.8rem;border-bottom:1px solid #ddd;padding-bottom:.3rem;}
-h3{margin-top:1.2rem;} img{max-width:100%;height:auto;display:block;margin:.8rem auto;border:1px solid #eee;}
-table{border-collapse:collapse;width:100%;margin:1rem 0;} th,td{border:1px solid #ccc;padding:.4rem .6rem;}
-th{background:#f6f6f6;} code{background:#f4f4f4;padding:0 .25rem;} .caption{color:#555;text-align:center;margin-top:-.3rem;margin-bottom:1rem;}
-hr{border:none;border-top:1px solid #ddd;margin:1.4rem 0;}
-.math-block{overflow-x:auto;margin:1rem 0;padding:.7rem;background:#fafafa;border-radius:6px;text-align:center;}
-.subtitle{color:#555;font-size:1rem;margin-top:-.6rem;margin-bottom:1rem;}
+:root {
+  --text: #1f2328;
+  --muted: #57606a;
+  --border: #e6e8eb;
+  --bg: #ffffff;
+}
+* { box-sizing: border-box; }
+body {
+  font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", "Source Han Sans SC", sans-serif;
+  max-width: 820px;
+  margin: 0 auto;
+  padding: 2.4rem 1.6rem 3.5rem;
+  line-height: 1.85;
+  color: var(--text);
+  background: var(--bg);
+  font-size: 16.5px;
+  text-rendering: optimizeLegibility;
+}
+h1, h2, h3, h4 {
+  font-weight: 650;
+  line-height: 1.35;
+  text-indent: 0 !important;
+}
+h1 { font-size: 1.55rem; margin: 0 0 .6rem; }
+h2 {
+  margin-top: 2rem;
+  margin-bottom: .85rem;
+  font-size: 1.25rem;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: .35rem;
+}
+h3 { margin-top: 1.35rem; margin-bottom: .55rem; font-size: 1.08rem; }
+p {
+  margin: .75rem 0;
+  text-indent: 2em;
+}
+p.subtitle {
+  text-indent: 0;
+  color: var(--muted);
+  font-size: 1.02rem;
+  margin: .15rem 0 1rem;
+  line-height: 1.5;
+}
+p.meta {
+  text-indent: 0;
+  color: var(--muted);
+  margin: .15rem 0;
+  font-size: .95rem;
+}
+p.keywords {
+  text-indent: 0;
+  margin: 1rem 0 0;
+}
+p.caption {
+  text-indent: 0;
+  text-align: center;
+  color: var(--muted);
+  font-size: .95rem;
+  margin: .35rem 0 1.1rem;
+}
+img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  margin: .9rem auto;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  object-fit: contain;
+  background: #fff;
+}
+table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 1rem 0 1.2rem;
+  font-size: .95rem;
+  text-indent: 0;
+}
+th, td {
+  border: 1px solid #d0d7de;
+  padding: .45rem .6rem;
+  text-align: left;
+  text-indent: 0;
+  vertical-align: top;
+}
+th { background: #f6f8fa; font-weight: 600; }
+ul, ol {
+  margin: .55rem 0 .9rem 0;
+  padding-left: 1.6rem;
+  text-indent: 0;
+}
+li {
+  margin: .28rem 0;
+  text-indent: 0;
+  padding-left: .15rem;
+}
+li > p { text-indent: 0; margin: .2rem 0; }
+code {
+  background: #f4f6f8;
+  padding: .05rem .28rem;
+  border-radius: 3px;
+  font-size: .92em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 1.6rem 0;
+}
+.math-block {
+  overflow-x: auto;
+  margin: 1rem 0;
+  padding: .55rem .4rem;
+  background: transparent;
+  border: none;
+  text-align: center;
+  text-indent: 0;
+}
+.math-block .katex-display {
+  margin: .4rem 0;
+}
+.katex { font-size: 1.05em; }
+strong { font-weight: 650; }
+a { color: #0969da; text-decoration: none; }
+a:hover { text-decoration: underline; }
+@media (max-width: 640px) {
+  body { padding: 1.4rem 1rem 2.5rem; font-size: 16px; }
+  p { text-indent: 2em; }
+}
 </style></head><body>
 ${fullBody}
 </body></html>
@@ -206,6 +332,5 @@ ${fullBody}
 
 fs.writeFileSync(outPath, html);
 console.log('Wrote', outPath, 'bytes', html.length, 'math slots', mathSlots.length);
-// sanity: raw delimiters should not leak (except inside annotation)
 const leak = (html.match(/\\\(|\\\[|\$\$/g) || []).length;
 console.log('raw math delimiter leaks (approx):', leak);
